@@ -17,17 +17,19 @@ import os
 import tempfile
 import time
 
+import runpod
 import torch
 from PIL import Image
 
 # --- Cache location: point HF at the network volume if present -----------------
 # RunPod network volumes mount at /runpod-volume on serverless workers.
+# This must run BEFORE diffusers is imported, since the HF libraries read
+# HF_HOME at import time — hence the deferred diffusers import below.
 _VOLUME = "/runpod-volume"
 if os.path.isdir(_VOLUME):
     os.environ.setdefault("HF_HOME", os.path.join(_VOLUME, "hf"))
 os.makedirs(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface")), exist_ok=True)
 
-import runpod  # noqa: E402
 from diffusers import LTX2ImageToVideoPipeline  # noqa: E402
 from diffusers.utils import export_to_video, load_image  # noqa: E402
 

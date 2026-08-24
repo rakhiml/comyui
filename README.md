@@ -1,17 +1,32 @@
-# LTX-2.3 Image-to-Video — RunPod Serverless (GitHub deploy)
+# LTX-2.3 Image-to-Video — RunPod Serverless
 
-A serverless worker that runs **LTX-2.3** image-to-video (i2v). Deploys to RunPod
-directly from this GitHub repo — RunPod reads the `Dockerfile`, builds the image
-in its own registry, and redeploys on every push to the watched branch. No local
-Docker, no manual image push.
+A serverless worker that runs **LTX-2.3** image-to-video (i2v). Every push to
+`main` builds the image on GitHub's runners and pushes it to GHCR; the RunPod
+endpoint runs that image. No local Docker required.
+
+## Why not RunPod's GitHub integration
+
+RunPod can build from a repo directly, but its build queue stalls: a build here
+sat in *"waiting for build"* indefinitely, and the same failure is reported by
+other users against RunPod's own official repos. Building on GitHub Actions
+sidesteps that queue entirely and has a second benefit — the endpoint then runs
+a plain image reference, which the REST API can set, so the endpoint can be
+created and updated programmatically instead of only through the console.
+
+If you see a *"Could not find `runpod.serverless.start()`"* warning in the
+console, it is a false negative. This handler matches RunPod's canonical
+documented form exactly, and the widely-deployed `wlsdml1114/generate_video`
+Hub worker passes the same check with a `CMD` that doesn't even invoke its
+handler directly.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `handler.py` | RunPod serverless handler; loads the pipeline once, runs i2v, returns mp4 |
-| `Dockerfile` | Build recipe (torch-preinstalled CUDA base + ffmpeg) |
+| `Dockerfile` | Build recipe (slim torch/CUDA runtime base + ffmpeg) |
 | `requirements.txt` | Python deps, `diffusers` pinned to 0.40.0 |
+| `.github/workflows/build.yml` | Builds and pushes the image to GHCR on every push to `main` |
 | `test_input.json` | Sample job for local testing |
 
 ## Notes before you deploy
@@ -22,9 +37,13 @@ Docker, no manual image push.
   (2026-08-20), so this repo pins `diffusers==0.40.0` — no git install, and
   rebuilds are reproducible. Model cards still saying "install diffusers from
   git" predate that release.
-- **Base image matters.** diffusers 0.40.0 needs `torch>=2.6`, and the A100
-  serverless pool reports CUDA **12.8** (not 12.4), so the Dockerfile uses a
-  torch-2.8 / cu12.8 base. Don't downgrade it.
+- **Base image matters.** diffusers 0.40.0 needs `torch>=2.6`, and the GPU pools
+  report CUDA **12.8** (not 12.4), so the Dockerfile uses a cu12.8 base. It is
+  the `-runtime` image, not `-devel`: nothing here compiles CUDA extensions, and
+  runtime is ~4.3 GB compressed against ~11.7 GB for RunPod's devel images. On
+  serverless, image size *is* cold-start latency — a worker cannot start until
+  the whole image is pulled, and an 11.7 GB image left workers stuck in
+  `INITIALIZING` for 25+ minutes here.
 - **Pipeline class is loaded explicitly.** The repo's `model_index.json` declares
   `_class_name: "LTX2Pipeline"` — the *text-to-video* class, whose `__call__`
   takes no `image` argument. The handler therefore loads
@@ -37,12 +56,19 @@ Docker, no manual image push.
 
 ## Deployed configuration
 
-The endpoint must be created in the **console** — the REST v2 API accepts only
-`image`/`templateId`, so GitHub-sourced endpoints cannot be created via API/MCP.
+Because the endpoint runs a plain image, it can be created via the REST API or
+the RunPod MCP server rather than the console.
+
+**One-time setup:** after the first workflow run, the GHCR package is private by
+default. Either make it public (GitHub → your profile → Packages →
+`comyui` → Package settings → Change visibility → Public), or keep it private
+and register a container registry credential with RunPod and pass its id as
+`containerRegistryAuthId`. Public is simpler and leaks nothing the public repo
+doesn't already expose.
 
 | Setting | Value |
 |---|---|
-| Repo / branch | `rakhiml/comyui` @ `main`, Dockerfile path `Dockerfile` |
+| Image | `ghcr.io/rakhiml/comyui:latest` (built by `.github/workflows/build.yml`) |
 | Network volume | `ltx23-i2v-weights` (`us16ywe3fc`), 150 GB |
 | Data center | **US-KS-2** (the volume's DC — the endpoint must match) |
 | GPU pool | `BLACKWELL_96` — RTX PRO 6000, 96 GB, $3.49/hr. Add `ADA_80_PRO` (H100 80 GB, $4.79/hr) as a second pool for resilience. **Not `AMPERE_80`** — A100 has no US-KS-2 capacity. |
