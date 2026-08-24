@@ -1,9 +1,8 @@
-# LTX-2.3 needs LTX-2 support that is NOT yet in a stable diffusers release.
-# It must come from git. Installing @main makes RunPod rebuilds non-reproducible
-# (every push could pull a different commit) — so BEFORE going to production,
-# replace `main` below with a specific commit SHA you've verified works:
-#   git+https://github.com/huggingface/diffusers.git@<PINNED_SHA>
-diffusers @ git+https://github.com/huggingface/diffusers.git@main
+# LTX-2 support (LTX2Pipeline) ships in the stable diffusers 0.40.0 release
+# (2026-08-20), so no git install is needed. Pinned exactly for reproducible
+# RunPod rebuilds — every push to the watched branch rebuilds the image, and an
+# unpinned dep would let the build drift underneath you.
+diffusers==0.40.0
 
 transformers>=4.44.0
 accelerate>=0.34.0
@@ -12,4 +11,5 @@ imageio[ffmpeg]>=2.34.0
 imageio-ffmpeg>=0.5.1
 Pillow>=10.0.0
 sentencepiece>=0.2.0
+hf_transfer>=0.1.6
 # torch is provided by the CUDA base image in the Dockerfile — do not pin it here.

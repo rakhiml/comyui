@@ -10,17 +10,19 @@ Docker, no manual image push.
 | File | Purpose |
 |------|---------|
 | `handler.py` | RunPod serverless handler; loads the pipeline once, runs i2v, returns mp4 |
-| `Dockerfile` | Build recipe (torch-preinstalled CUDA base + diffusers from git) |
-| `requirements.txt` | Python deps — **read the diffusers pinning note inside** |
+| `Dockerfile` | Build recipe (torch-preinstalled CUDA base + ffmpeg) |
+| `requirements.txt` | Python deps, `diffusers` pinned to 0.40.0 |
 | `test_input.json` | Sample job for local testing |
 
-## ⚠️ Before you deploy — two things to fix
+## ⚠️ Before you deploy
 
-1. **Pin diffusers.** LTX-2.3 support isn't in a stable diffusers release yet, so
-   `requirements.txt` installs it from git `@main`. That makes rebuilds
-   non-reproducible. Replace `main` with a verified commit SHA before production.
-2. **The model may be gated on Hugging Face.** If so, accept the license on the
-   model page and set `HF_TOKEN` as an endpoint environment variable / secret.
+**The model may be gated on Hugging Face.** If so, accept the license on the model
+page and set `HF_TOKEN` as an endpoint environment variable / secret.
+
+> **Dependency note:** `LTX2Pipeline` ships in the stable **diffusers 0.40.0**
+> (released 2026-08-20), so this repo pins `diffusers==0.40.0` — no git install,
+> and rebuilds are reproducible. Some model cards still say "install diffusers
+> from git"; that guidance predates the 0.40.0 release.
 
 ## Deploy steps
 

@@ -8,13 +8,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     HF_HUB_ENABLE_HF_TRANSFER=1
 
 # ffmpeg for export_to_video / imageio muxing.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg git \
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --upgrade pip && pip install -r requirements.txt hf_transfer
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY handler.py .
 
