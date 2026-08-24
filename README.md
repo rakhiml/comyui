@@ -45,7 +45,7 @@ The endpoint must be created in the **console** — the REST v2 API accepts only
 | Repo / branch | `rakhiml/comyui` @ `main`, Dockerfile path `Dockerfile` |
 | Network volume | `ltx23-i2v-weights` (`us16ywe3fc`), 150 GB |
 | Data center | **US-KS-2** (the volume's DC — the endpoint must match) |
-| GPU pool | `AMPERE_80` — A100 80 GB, $2.72/hr serverless |
+| GPU pool | `BLACKWELL_96` — RTX PRO 6000, 96 GB, $3.49/hr. Add `ADA_80_PRO` (H100 80 GB, $4.79/hr) as a second pool for resilience. **Not `AMPERE_80`** — A100 has no US-KS-2 capacity. |
 | Container disk | 30 GB (image is large: torch 2.8 + CUDA) |
 | Workers | min 0, max 1 for the first run; raise max after weights are cached |
 | Execution timeout | **1800 s for the first (seeding) job** — ~95 GB of downloads plus model load plus one generation will blow through 900 s. Lower it to ~600 s once weights are cached. A timeout isn't fatal (HF downloads resume), just billed waste. |
@@ -60,6 +60,13 @@ Deploy.
   every DC even supports volumes (US-MO-1, for example, does not), and not every
   DC stocks large GPUs — EU-RO-1 had no ≥48 GB serverless stock at all. Verify
   the GPU has stock in the volume's DC *before* creating either.
+- **Serverless GPU stock moves hour to hour.** US-KS-2 listed A100 capacity when
+  this volume was created and had dropped it within the hour, while still
+  offering RTX PRO 6000 and H100. If the console's endpoint wizard does not show
+  your network volume, that usually means the GPU pool you selected has no
+  capacity in the volume's DC — change the pool rather than the volume. Check
+  current stock per DC with the RunPod MCP (`get-gpu-type`, `product: SERVERLESS`)
+  and select several pools so one pool draining doesn't starve the endpoint.
 - **The model repo is ~95 GB**, which is why the volume is 150 GB rather than 100.
 - **Seed the volume with one warm-up request before scaling out.** Keep
   `workersMax=1` for the first job so a single worker downloads the weights into
