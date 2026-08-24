@@ -1,6 +1,12 @@
 # Torch is preinstalled in this base image so the RunPod GitHub builder stays
 # well inside its build-time limits (no compiling torch from scratch).
-FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+#
+# Base image requirements — do not downgrade without checking both:
+#   1. diffusers 0.40.0 requires torch >= 2.6.
+#   2. CUDA 12.8 provides Blackwell (sm_120) kernels, needed for RTX PRO 6000
+#      class GPUs. A cu12.4 image imports fine and then fails at the first
+#      CUDA op on Blackwell.
+FROM runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
