@@ -48,7 +48,7 @@ The endpoint must be created in the **console** — the REST v2 API accepts only
 | GPU pool | `AMPERE_80` — A100 80 GB, $2.72/hr serverless |
 | Container disk | 30 GB (image is large: torch 2.8 + CUDA) |
 | Workers | min 0, max 1 for the first run; raise max after weights are cached |
-| Execution timeout | ≥ 900 s, so the first weight download can't time the job out |
+| Execution timeout | **1800 s for the first (seeding) job** — ~95 GB of downloads plus model load plus one generation will blow through 900 s. Lower it to ~600 s once weights are cached. A timeout isn't fatal (HF downloads resume), just billed waste. |
 
 **Console steps:** Serverless → New Endpoint → Import Git Repository → pick the
 repo/branch → set Dockerfile path → attach the volume → pick the GPU pool →
