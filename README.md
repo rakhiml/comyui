@@ -25,6 +25,15 @@ Docker, no manual image push.
 - **Base image matters.** diffusers 0.40.0 needs `torch>=2.6`, and the A100
   serverless pool reports CUDA **12.8** (not 12.4), so the Dockerfile uses a
   torch-2.8 / cu12.8 base. Don't downgrade it.
+- **Pipeline class is loaded explicitly.** The repo's `model_index.json` declares
+  `_class_name: "LTX2Pipeline"` — the *text-to-video* class, whose `__call__`
+  takes no `image` argument. The handler therefore loads
+  `LTX2ImageToVideoPipeline` directly. Using `DiffusionPipeline.from_pretrained`
+  here resolves to the wrong class and fails on the first request.
+- **Prompt enhancement is off.** Verified against the diffusers 0.40.0 source:
+  `enable_prompt_enhancement` defaults to `False`, `prompt_enhancer` is an
+  optional component that this repo does not ship, and the handler passes the
+  flag explicitly anyway. Your prompts reach the model verbatim.
 
 ## Deployed configuration
 

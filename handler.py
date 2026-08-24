@@ -28,7 +28,7 @@ if os.path.isdir(_VOLUME):
 os.makedirs(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface")), exist_ok=True)
 
 import runpod  # noqa: E402
-from diffusers import DiffusionPipeline  # noqa: E402
+from diffusers import LTX2ImageToVideoPipeline  # noqa: E402
 from diffusers.utils import export_to_video, load_image  # noqa: E402
 
 # Distilled diffusers-format checkpoint = fewest steps = cheapest per clip.
@@ -42,15 +42,18 @@ HF_TOKEN = os.environ.get("HF_TOKEN")  # only needed if the repo is gated
 # --- Load the pipeline once ----------------------------------------------------
 print(f"[boot] loading {MODEL_ID} (HF_HOME={os.environ.get('HF_HOME')}) ...", flush=True)
 _t0 = time.time()
-PIPE = DiffusionPipeline.from_pretrained(
+# Load LTX2ImageToVideoPipeline EXPLICITLY. The repo's model_index.json declares
+# _class_name "LTX2Pipeline", so DiffusionPipeline.from_pretrained would resolve
+# to the text-to-video class — whose __call__ takes no `image` argument and would
+# fail on the first request. Only LTX2ImageToVideoPipeline accepts `image`.
+PIPE = LTX2ImageToVideoPipeline.from_pretrained(
     MODEL_ID,
     dtype=torch.bfloat16,
+    device_map="cuda",
     token=HF_TOKEN,
 )
-PIPE.to("cuda")
-# If you deploy on a 48GB card and hit OOM, comment out .to("cuda") above and
-# uncomment the next line to trade speed for memory:
-# PIPE.enable_model_cpu_offload()
+# If you move to a 48GB card and hit OOM, drop device_map="cuda" above and call
+# PIPE.enable_model_cpu_offload() here instead — slower, but far less VRAM.
 print(f"[boot] pipeline ready in {time.time() - _t0:.1f}s", flush=True)
 
 
@@ -110,8 +113,13 @@ def handler(job):
         width=width,
         height=height,
         num_frames=num_frames,
+        frame_rate=fps,
         num_inference_steps=steps,
         guidance_scale=guidance,
+        # Explicitly off. It already defaults to False and this repo ships no
+        # prompt_enhancer component, but pin it so an upstream default change
+        # cannot silently start rewriting prompts.
+        enable_prompt_enhancement=False,
         generator=generator,
     )
     frames = result.frames[0]
