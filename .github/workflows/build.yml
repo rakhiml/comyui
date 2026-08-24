@@ -5,12 +5,10 @@ name: Build and push worker image
 # whose build queue can sit in "waiting for build" indefinitely. The endpoint
 # then runs a plain image reference, which the RunPod REST API can set
 # directly — no console build step involved.
+# Manual-only for now: the primary deploy path is RunPod's own GitHub
+# integration. This is the fallback for when that build queue stalls —
+# run it from the Actions tab, then point the endpoint at the GHCR image.
 on:
-  push:
-    branches: [main]
-    # Docs-only edits don't change the image.
-    paths-ignore:
-      - '**.md'
   workflow_dispatch:
 
 env:
