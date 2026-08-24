@@ -1,0 +1,7 @@
+.git
+__pycache__/
+*.pyc
+test_input.json
+*.mp4
+.venv/
+README.md

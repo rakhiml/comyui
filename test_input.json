@@ -1,0 +1,13 @@
+{
+  "input": {
+    "image": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/cat.png",
+    "prompt": "A cinematic slow push-in, gentle camera motion, soft natural light",
+    "width": 768,
+    "height": 512,
+    "num_frames": 97,
+    "steps": 8,
+    "guidance_scale": 1.0,
+    "fps": 24,
+    "seed": 42
+  }
+}
