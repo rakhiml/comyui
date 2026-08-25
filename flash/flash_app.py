@@ -98,6 +98,15 @@ MODEL_ID = "diffusers/LTX-2.3-Distilled-Diffusers"
         "av>=12.0.0",
     ],
     system_dependencies=["ffmpeg"],
+    # Set on the endpoint, not just in Python. torch reads this when its CUDA
+    # allocator initialises, and the module-level os.environ call in this file
+    # only wins if nothing has touched CUDA before our import. Putting it in the
+    # process environment removes that ordering question.
+    #
+    # NOTE: Flash owns the endpoint's env, so deploying this may clear an
+    # HF_TOKEN set by hand in the console. Re-add it there afterwards if needed;
+    # it is optional now that the weights are cached on the volume.
+    env={"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
     volume=WEIGHTS_VOLUME,
     # Pin scheduling to the volume's datacenter. Without this the endpoint is
     # offered every datacenter Flash knows about, and only US-KS-2 has the volume.
@@ -152,20 +161,40 @@ class LTXImageToVideo:
         self.pipe = LTX2ImageToVideoPipeline.from_pretrained(
             MODEL_ID,
             dtype=torch.bfloat16,
-            device_map="cuda",
         )
-        # Decode the latents in tiles. The weights alone occupy ~69GB, so a
-        # full-frame decode wants a single ~15GB block on top of that and is
-        # what actually OOMs on the second request. Tiling trades a little
-        # speed for a much lower peak, and is the difference between a worker
-        # that serves one job and one that serves many.
+
+        # Do NOT pin the whole pipeline to the GPU with device_map="cuda".
+        #
+        # These weights are ~69GB resident. On a 93GB card that leaves ~24GB,
+        # and the VAE decode alone asks for a single ~15GB block. The first
+        # request fits on clean memory; the second fails once any fragmentation
+        # appears. That budget is marginal by construction, so freeing memory
+        # between jobs cannot rescue it — the resident footprint has to come
+        # down.
+        #
+        # Model CPU offload keeps only the module currently executing on the
+        # GPU and parks the rest in host RAM, so the transformer and the VAE no
+        # longer have to coexist in VRAM. It costs some speed per clip and buys
+        # a worker that serves many requests instead of exactly one.
+        self.pipe.enable_model_cpu_offload()
+
+        # Decode in tiles as well, so the decode peak stays low even when the
+        # VAE is the resident module. Explicit sizes rather than defaults: the
+        # defaults only split samples above their own minimums, and a 768x512
+        # clip can sit under that threshold and silently decode whole.
         try:
-            self.pipe.vae.enable_tiling()
-            print("[boot] VAE tiling enabled", flush=True)
+            self.pipe.vae.enable_tiling(
+                tile_sample_min_height=256,
+                tile_sample_min_width=256,
+                tile_sample_stride_height=192,
+                tile_sample_stride_width=192,
+            )
+            print("[boot] VAE tiling enabled (256px tiles)", flush=True)
         except Exception as exc:  # noqa: BLE001
             print(f"[boot] VAE tiling unavailable: {exc}", flush=True)
 
         print(f"[boot] pipeline ready in {time.time() - t0:.1f}s", flush=True)
+        self._free_gpu("after load")
 
     def _free_gpu(self, label):
         """Return cached blocks to the driver between requests.
