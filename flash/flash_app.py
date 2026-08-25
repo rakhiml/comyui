@@ -16,7 +16,20 @@ Deploy:
     flash deploy
 """
 
+import os
+
 from runpod_flash import DataCenter, Endpoint, GpuGroup, NetworkVolume, PodTemplate
+
+# Read at DEPLOY time from the local environment and injected into the endpoint.
+# Never hardcode it here — this repository is public.
+#
+# The default checkpoint is public and ungated, so this is optional; it mainly
+# buys higher Hugging Face rate limits on the initial ~95GB pull, and is required
+# only if MODEL_ID is switched to a gated checkpoint.
+#
+#   export HF_TOKEN=...   # then: flash deploy
+_HF_TOKEN = os.environ.get("HF_TOKEN")
+_ENDPOINT_ENV = {"HF_TOKEN": _HF_TOKEN} if _HF_TOKEN else None
 
 # The existing 150GB volume in US-KS-2.
 #
@@ -74,6 +87,7 @@ MODEL_ID = "diffusers/LTX-2.3-Distilled-Diffusers"
         "av>=12.0.0",
     ],
     system_dependencies=["ffmpeg"],
+    env=_ENDPOINT_ENV,
     volume=WEIGHTS_VOLUME,
     # Pin scheduling to the volume's datacenter. Without this the endpoint is
     # offered every datacenter Flash knows about, and only US-KS-2 has the volume.
