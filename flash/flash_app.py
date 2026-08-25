@@ -261,6 +261,7 @@ class LTXImageToVideo:
         self,
         image: str,
         prompt: str,
+        negative_prompt: str = None,
         width: int = 768,
         height: int = 512,
         num_frames: int = 97,
@@ -305,6 +306,11 @@ class LTXImageToVideo:
             result = self.pipe(
                 image=init_image,
                 prompt=prompt,
+                # None becomes "" inside the pipeline. Classifier-free guidance
+                # is active here even though guidance_scale is 1.0, because
+                # do_classifier_free_guidance also fires on audio_guidance_scale
+                # (default 7.0), so a negative prompt does affect the output.
+                negative_prompt=negative_prompt,
                 width=width,
                 height=height,
                 num_frames=num_frames,
@@ -342,4 +348,5 @@ class LTXImageToVideo:
             "model": MODEL_ID,
             "lora": lora,
             "lora_scale": float(lora_scale) if active_adapter else None,
+            "negative_prompt": negative_prompt,
         }
