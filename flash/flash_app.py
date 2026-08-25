@@ -16,7 +16,14 @@ Deploy:
     flash deploy
 """
 
-from runpod_flash import DataCenter, Endpoint, GpuGroup, NetworkVolume, PodTemplate
+import os
+
+# Set before torch initialises its CUDA allocator. Without this the allocator
+# uses fixed-size segments and fragments across requests: a worker was seen
+# holding 15.98GB "reserved but unallocated" while a 15.35GB decode failed.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+from runpod_flash import DataCenter, Endpoint, GpuGroup, NetworkVolume, PodTemplate  # noqa: E402
 
 # HF_TOKEN is deliberately NOT set here.
 #
@@ -147,7 +154,38 @@ class LTXImageToVideo:
             dtype=torch.bfloat16,
             device_map="cuda",
         )
+        # Decode the latents in tiles. The weights alone occupy ~69GB, so a
+        # full-frame decode wants a single ~15GB block on top of that and is
+        # what actually OOMs on the second request. Tiling trades a little
+        # speed for a much lower peak, and is the difference between a worker
+        # that serves one job and one that serves many.
+        try:
+            self.pipe.vae.enable_tiling()
+            print("[boot] VAE tiling enabled", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[boot] VAE tiling unavailable: {exc}", flush=True)
+
         print(f"[boot] pipeline ready in {time.time() - t0:.1f}s", flush=True)
+
+    def _free_gpu(self, label):
+        """Return cached blocks to the driver between requests.
+
+        The pipeline is a per-worker singleton, so anything still referenced
+        after a generation stays resident for the life of the worker. Without
+        this the second request inherits the first one's peak.
+        """
+        import gc
+
+        import torch
+
+        gc.collect()
+        torch.cuda.empty_cache()
+        alloc = torch.cuda.memory_allocated() / 1e9
+        reserved = torch.cuda.memory_reserved() / 1e9
+        print(
+            f"[mem] {label}: allocated={alloc:.1f}GB reserved={reserved:.1f}GB",
+            flush=True,
+        )
 
     def _apply_lora(self, lora, lora_scale):
         """Select the LoRA for THIS request, or clear any left over from the last.
@@ -233,29 +271,37 @@ class LTXImageToVideo:
             generator = torch.Generator(device="cuda").manual_seed(int(seed))
 
         t0 = time.time()
-        result = self.pipe(
-            image=init_image,
-            prompt=prompt,
-            width=width,
-            height=height,
-            num_frames=num_frames,
-            frame_rate=fps,
-            num_inference_steps=int(steps),
-            guidance_scale=float(guidance_scale),
-            # Explicitly off. It already defaults to False and this checkpoint
-            # ships no prompt_enhancer component, but pin it so an upstream
-            # default change cannot silently start rewriting prompts.
-            enable_prompt_enhancement=False,
-            generator=generator,
-        )
+        result = None
+        try:
+            result = self.pipe(
+                image=init_image,
+                prompt=prompt,
+                width=width,
+                height=height,
+                num_frames=num_frames,
+                frame_rate=fps,
+                num_inference_steps=int(steps),
+                guidance_scale=float(guidance_scale),
+                # Explicitly off. It already defaults to False and this checkpoint
+                # ships no prompt_enhancer component, but pin it so an upstream
+                # default change cannot silently start rewriting prompts.
+                enable_prompt_enhancement=False,
+                generator=generator,
+            )
 
-        # LTX-2.3 generates video and audio jointly; export_to_video writes the
-        # video track only. Mux result.audio separately if you need sound.
-        out_path = os.path.join(tempfile.mkdtemp(), "output.mp4")
-        export_to_video(result.frames[0], out_path, fps=fps)
+            # LTX-2.3 generates video and audio jointly; export_to_video writes
+            # the video track only. Mux result.audio separately if you need sound.
+            out_path = os.path.join(tempfile.mkdtemp(), "output.mp4")
+            export_to_video(result.frames[0], out_path, fps=fps)
 
-        with open(out_path, "rb") as f:
-            video_b64 = base64.b64encode(f.read()).decode("utf-8")
+            with open(out_path, "rb") as f:
+                video_b64 = base64.b64encode(f.read()).decode("utf-8")
+        finally:
+            # Runs on the failure path too: an OOM mid-generation otherwise
+            # leaves the partial allocation resident and every subsequent
+            # request on this worker inherits it.
+            del result, generator, init_image
+            self._free_gpu("after generate")
 
         return {
             "video_base64": video_b64,
