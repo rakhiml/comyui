@@ -57,6 +57,32 @@ WEIGHTS_VOLUME = NetworkVolume(
 
 MODEL_ID = "diffusers/LTX-2.3-Distilled-Diffusers"
 
+# Applied when a request supplies no negative prompt. Classifier-free guidance
+# is active on this setup even at guidance_scale=1.0, because
+# do_classifier_free_guidance also fires on audio_guidance_scale (default 7.0),
+# so this actually steers the output rather than being inert.
+#
+# Pass any non-empty negative_prompt to override it.
+DEFAULT_NEGATIVE_PROMPT = (
+    "low quality, worst quality, blurry, out of focus, soft focus, low resolution, "
+    "pixelated, noisy, grainy, oversaturated, undersaturated, overexposed, "
+    "underexposed, bad lighting, compression artifacts, jpeg artifacts, flickering, "
+    "frame flicker, temporal inconsistency, unstable image, jitter, camera shake, "
+    "unwanted camera movement, warping, morphing, melting, deformation, distorted "
+    "anatomy, bad anatomy, malformed body, extra limbs, extra arms, extra legs, "
+    "extra fingers, missing fingers, fused fingers, malformed hands, distorted face, "
+    "asymmetrical face, facial warping, inconsistent facial features, identity "
+    "change, face morphing, eye deformation, crossed eyes, unnatural eyes, mouth "
+    "distortion, lip-sync artifacts, unnatural motion, jerky motion, erratic "
+    "movement, teleportation, sudden position changes, object duplication, "
+    "disappearing objects, appearing objects, inconsistent clothing, changing "
+    "clothes, changing hairstyle, changing colors, background morphing, background "
+    "flicker, geometry distortion, texture crawling, unnatural physics, floating "
+    "objects, duplicated subjects, ghosting, trails, motion artifacts, static image, "
+    "frozen motion, excessive motion blur, text, subtitles, captions, watermark, "
+    "logo, UI, border, cropped subject"
+)
+
 
 @Endpoint(
     name="ltx23-i2v",
@@ -289,6 +315,11 @@ class LTXImageToVideo:
         num_frames = ((max(9, int(num_frames)) - 1) // 8) * 8 + 1
 
         active_adapter = self._apply_lora(lora, lora_scale)
+
+        # Missing or blank falls back to the shared default; any non-empty value
+        # from the caller wins.
+        if not (negative_prompt or "").strip():
+            negative_prompt = DEFAULT_NEGATIVE_PROMPT
 
         if image.startswith("http://") or image.startswith("https://"):
             init_image = load_image(image).convert("RGB")
