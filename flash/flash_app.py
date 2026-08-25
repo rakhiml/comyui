@@ -110,10 +110,23 @@ class LTXImageToVideo:
         # which reads HF_HOME at import time. The mount path is not documented,
         # so probe the known candidates rather than assuming one; falling back
         # to container disk would try to fit ~95GB into 30GB and fail.
+        self._volume_root = None
         for candidate in ("/runpod-volume", "/workspace", "/runpod_volume"):
             if os.path.isdir(candidate):
+                self._volume_root = candidate
                 os.environ["HF_HOME"] = os.path.join(candidate, "hf")
                 break
+
+        # LoRA files live on the same volume, under loras/.
+        self._lora_dir = (
+            os.path.join(self._volume_root, "loras") if self._volume_root else None
+        )
+        if self._lora_dir:
+            os.makedirs(self._lora_dir, exist_ok=True)
+
+        # adapter_name -> True, for adapters already loaded into this worker's
+        # pipeline. Loading is expensive; switching between loaded adapters is not.
+        self._loaded_adapters = {}
         os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
         os.makedirs(
             os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface")),
@@ -136,6 +149,47 @@ class LTXImageToVideo:
         )
         print(f"[boot] pipeline ready in {time.time() - t0:.1f}s", flush=True)
 
+    def _apply_lora(self, lora, lora_scale):
+        """Select the LoRA for THIS request, or clear any left over from the last.
+
+        The pipeline is a per-worker singleton, so an adapter enabled for one
+        request stays enabled for every later request on that worker unless it
+        is explicitly turned off. That failure is silent — no error, just
+        wrong-looking video — so the no-LoRA branch below is the important one.
+        """
+        import os
+
+        if not lora:
+            if self._loaded_adapters:
+                self.pipe.disable_lora()
+            return None
+
+        # A bare name means a file on the volume; anything with a slash or a
+        # .safetensors suffix is treated as an explicit path or an HF repo id.
+        source = lora
+        if "/" not in lora and self._lora_dir:
+            candidate = os.path.join(self._lora_dir, lora)
+            if not os.path.exists(candidate) and not lora.endswith(".safetensors"):
+                candidate += ".safetensors"
+            if os.path.exists(candidate):
+                source = candidate
+            else:
+                available = sorted(os.listdir(self._lora_dir)) if self._lora_dir else []
+                raise FileNotFoundError(
+                    f"LoRA '{lora}' not found in {self._lora_dir}. "
+                    f"Available: {available or 'none uploaded yet'}"
+                )
+
+        adapter = "".join(c if c.isalnum() else "_" for c in lora)
+        if adapter not in self._loaded_adapters:
+            print(f"[lora] loading {source} as '{adapter}'", flush=True)
+            self.pipe.load_lora_weights(source, adapter_name=adapter)
+            self._loaded_adapters[adapter] = True
+
+        self.pipe.set_adapters([adapter], [float(lora_scale)])
+        self.pipe.enable_lora()
+        return adapter
+
     def generate(
         self,
         image: str,
@@ -147,6 +201,8 @@ class LTXImageToVideo:
         guidance_scale: float = 1.0,
         fps: int = 24,
         seed: int = None,
+        lora: str = None,
+        lora_scale: float = 1.0,
     ) -> dict:
         import base64
         import io
@@ -163,6 +219,8 @@ class LTXImageToVideo:
         width = max(32, int(round(int(width) / 32)) * 32)
         height = max(32, int(round(int(height) / 32)) * 32)
         num_frames = ((max(9, int(num_frames)) - 1) // 8) * 8 + 1
+
+        active_adapter = self._apply_lora(lora, lora_scale)
 
         if image.startswith("http://") or image.startswith("https://"):
             init_image = load_image(image).convert("RGB")
@@ -207,4 +265,6 @@ class LTXImageToVideo:
             "num_frames": num_frames,
             "steps": int(steps),
             "model": MODEL_ID,
+            "lora": lora,
+            "lora_scale": float(lora_scale) if active_adapter else None,
         }
