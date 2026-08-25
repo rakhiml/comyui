@@ -55,7 +55,28 @@ WEIGHTS_VOLUME = NetworkVolume(
     size=150,
 )
 
-MODEL_ID = "diffusers/LTX-2.3-Distilled-Diffusers"
+# The full dev checkpoint. The standalone distilled checkpoint was noticeably
+# weaker — anatomy errors, motion that jitters rather than follows the prompt —
+# and distillation is baked into its weights, so there is no dial to back it off.
+#
+# Dev restores quality and can be sped back up by applying the distilled LoRA at
+# partial strength, which is what the ComfyUI templates do. Override with the
+# MODEL_ID env var to A/B against the distilled checkpoint without redeploying
+# code.
+MODEL_ID = os.environ.get("MODEL_ID", "diffusers/LTX-2.3-Diffusers")
+IS_DISTILLED = "distilled" in MODEL_ID.lower()
+
+# The distilled checkpoint is fixed at 8 steps with CFG 1.0. The dev checkpoint
+# wants many more steps and real guidance — and only above CFG 1.0 does a
+# negative prompt do anything, since the video CFG delta is
+# (guidance_scale - 1) * (cond - uncond).
+DEFAULT_STEPS = 8 if IS_DISTILLED else 30
+DEFAULT_GUIDANCE = 1.0 if IS_DISTILLED else 3.0
+
+# Applied on top of dev to recover most of the distilled speed while keeping
+# dev quality. diffusers auto-converts this Lightricks-format file.
+DISTILL_LORA_REPO = "Lightricks/LTX-2.3"
+DISTILL_LORA_FILE = "ltx-2.3-22b-distilled-lora-384-1.1.safetensors"
 
 # Applied when a request supplies no negative prompt. Classifier-free guidance
 # is active on this setup even at guidance_scale=1.0, because
@@ -265,6 +286,25 @@ class LTXImageToVideo:
                 self.pipe.disable_lora()
             return None
 
+        # "distill" is a shorthand for the official distilled LoRA. Applied to
+        # the dev checkpoint at partial strength it recovers most of the
+        # distilled speed while keeping dev quality — the trade the standalone
+        # distilled checkpoint makes for you at full strength with no dial.
+        # diffusers auto-converts this Lightricks-format file.
+        if lora == "distill":
+            adapter = "distill"
+            if adapter not in self._loaded_adapters:
+                print(f"[lora] loading {DISTILL_LORA_FILE}", flush=True)
+                self.pipe.load_lora_weights(
+                    DISTILL_LORA_REPO,
+                    weight_name=DISTILL_LORA_FILE,
+                    adapter_name=adapter,
+                )
+                self._loaded_adapters[adapter] = True
+            self.pipe.set_adapters([adapter], [float(lora_scale)])
+            self.pipe.enable_lora()
+            return adapter
+
         # A bare name means a file on the volume; anything with a slash or a
         # .safetensors suffix is treated as an explicit path or an HF repo id.
         source = lora
@@ -298,9 +338,9 @@ class LTXImageToVideo:
         negative_prompt: str = None,
         width: int = 768,
         height: int = 512,
-        num_frames: int = 97,
-        steps: int = 8,
-        guidance_scale: float = 1.0,
+        num_frames: int = 121,
+        steps: int = None,
+        guidance_scale: float = None,
         fps: int = 24,
         seed: int = None,
         lora: str = None,
@@ -329,6 +369,14 @@ class LTXImageToVideo:
                 1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875,
             ]
             DEFAULT_IMAGE_CRF = 33
+
+        # Defaults follow the loaded checkpoint rather than being hardcoded, so
+        # switching MODEL_ID does not silently leave distilled settings applied
+        # to the dev model.
+        steps = DEFAULT_STEPS if steps is None else int(steps)
+        guidance_scale = (
+            DEFAULT_GUIDANCE if guidance_scale is None else float(guidance_scale)
+        )
 
         # LTX requires width/height divisible by 32 and num_frames == 8k+1.
         # Clamp rather than reject, so odd client values still produce video.
