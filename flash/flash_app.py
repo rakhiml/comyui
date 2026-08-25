@@ -153,7 +153,14 @@ DEFAULT_NEGATIVE_PROMPT = (
     # NOTE: Flash owns the endpoint's env, so deploying this may clear an
     # HF_TOKEN set by hand in the console. Re-add it there afterwards if needed;
     # it is optional now that the weights are cached on the volume.
-    env={"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+    env={
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+        # Reclaim the distilled checkpoint's cache. The volume cannot hold it
+        # alongside the dev weights, and we no longer generate with it. Clear
+        # this once the space has been reclaimed; leaving it set is harmless
+        # but re-checks the path on every cold start.
+        "PURGE_HF_REPOS": "diffusers/LTX-2.3-Distilled-Diffusers",
+    },
     volume=WEIGHTS_VOLUME,
     # Pin scheduling to the volume's datacenter. Without this the endpoint is
     # offered every datacenter Flash knows about, and only US-KS-2 has the volume.
@@ -196,6 +203,30 @@ class LTXImageToVideo:
             exist_ok=True,
         )
         print(f"[boot] HF_HOME={os.environ.get('HF_HOME')}", flush=True)
+
+        # Drop checkpoints named in PURGE_HF_REPOS from the volume's HF cache.
+        #
+        # The volume holds one model comfortably and not two: adding the dev
+        # checkpoint alongside the distilled one exhausted it and every worker
+        # failed with "Disk quota exceeded (os error 122)". Growing the volume
+        # is a one-way door on RunPod — volumes can only grow — so reclaiming
+        # the checkpoint we no longer use is the cheaper fix.
+        #
+        # Only ever removes a Hugging Face cache directory, which is
+        # re-downloadable, and only for repos named explicitly in the env var.
+        purge = [r.strip() for r in os.environ.get("PURGE_HF_REPOS", "").split(",") if r.strip()]
+        if purge and self._volume_root:
+            import shutil
+
+            hub = os.path.join(os.environ["HF_HOME"], "hub")
+            for repo in purge:
+                if repo == MODEL_ID:
+                    print(f"[purge] refusing to remove the active model {repo}", flush=True)
+                    continue
+                target = os.path.join(hub, "models--" + repo.replace("/", "--"))
+                if os.path.isdir(target):
+                    shutil.rmtree(target, ignore_errors=True)
+                    print(f"[purge] removed {target}", flush=True)
 
         import torch
         from diffusers import LTX2ImageToVideoPipeline
