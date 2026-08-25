@@ -5,3 +5,7 @@ venv/
 *.mp4
 .env
 .DS_Store
+
+# Flash build state and artifacts
+.flash/
+artifact.tar.gz

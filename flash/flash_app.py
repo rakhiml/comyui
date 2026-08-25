@@ -16,11 +16,20 @@ Deploy:
     flash deploy
 """
 
-from runpod_flash import Endpoint, GpuGroup, NetworkVolume, PodTemplate
+from runpod_flash import DataCenter, Endpoint, GpuGroup, NetworkVolume, PodTemplate
 
-# The existing 150GB volume in US-KS-2. Attaching by id pins the endpoint to
-# that datacenter, which is required — volumes are datacenter-locked.
-WEIGHTS_VOLUME = NetworkVolume(id="us16ywe3fc")
+# The existing 150GB volume in US-KS-2.
+#
+# datacenter and size MUST be passed explicitly. NetworkVolume(id=...) does not
+# look up the real volume — it silently defaults to EU-RO-1 / 100GB, which then
+# propagates into the endpoint's `locations` as a list of 11 datacenters. A
+# worker scheduled outside US-KS-2 would find no volume mounted and try to pull
+# ~95GB of weights onto the container disk.
+WEIGHTS_VOLUME = NetworkVolume(
+    id="us16ywe3fc",
+    datacenter=DataCenter.US_KS_2,
+    size=150,
+)
 
 # Installed at build time into the deploy artifact, not per cold start.
 # torch is NOT listed: the Flash GPU runtime image already provides it, and
@@ -53,6 +62,9 @@ MODEL_ID = "diffusers/LTX-2.3-Distilled-Diffusers"
     dependencies=PYTHON_DEPS,
     system_dependencies=["ffmpeg"],
     volume=WEIGHTS_VOLUME,
+    # Pin scheduling to the volume's datacenter. Without this the endpoint is
+    # offered every datacenter Flash knows about, and only US-KS-2 has the volume.
+    datacenter=DataCenter.US_KS_2,
     template=PodTemplate(containerDiskInGb=30),
     # 12.8 covers H100 and Blackwell; the A100 pool reports 12.4 unavailable.
     min_cuda_version="12.8",
