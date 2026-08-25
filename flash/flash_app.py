@@ -317,6 +317,19 @@ class LTXImageToVideo:
         from diffusers.utils import load_image
         from PIL import Image
 
+        # Prefer the library's own constants so they track the checkpoint, but
+        # fall back to the published values if this internal path ever moves.
+        try:
+            from diffusers.pipelines.ltx2.utils import (
+                DEFAULT_IMAGE_CRF,
+                DISTILLED_SIGMA_VALUES,
+            )
+        except ImportError:
+            DISTILLED_SIGMA_VALUES = [
+                1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875,
+            ]
+            DEFAULT_IMAGE_CRF = 33
+
         # LTX requires width/height divisible by 32 and num_frames == 8k+1.
         # Clamp rather than reject, so odd client values still produce video.
         width = max(32, int(round(int(width) / 32)) * 32)
@@ -356,7 +369,22 @@ class LTXImageToVideo:
                 num_frames=num_frames,
                 frame_rate=fps,
                 num_inference_steps=int(steps),
+                # The distilled checkpoint is trained against a fixed, very
+                # non-uniform sigma schedule — five of its eight steps sit
+                # between 0.975 and 1.0, then it drops sharply. Running it on
+                # the scheduler's default sigmas is off-distribution and shows
+                # up as malformed anatomy, incoherent motion and background
+                # garbage rather than as an error. The model card is explicit
+                # that these must always be passed.
+                #
+                # Only supplied at the schedule's own step count; a caller
+                # asking for a different number of steps has left the schedule
+                # behind anyway.
+                sigmas=DISTILLED_SIGMA_VALUES if int(steps) == len(DISTILLED_SIGMA_VALUES) else None,
                 guidance_scale=float(guidance_scale),
+                # Match the H.264 compression the conditioning images were
+                # trained against (33 for LTX-2.3).
+                image_crf=DEFAULT_IMAGE_CRF,
                 # Explicitly off. It already defaults to False and this checkpoint
                 # ships no prompt_enhancer component, but pin it so an upstream
                 # default change cannot silently start rewriting prompts.
