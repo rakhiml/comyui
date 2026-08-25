@@ -66,6 +66,12 @@ MODEL_ID = "diffusers/LTX-2.3-Distilled-Diffusers"
         "Pillow>=10.0.0",
         "sentencepiece>=0.2.0",
         "hf_transfer>=0.1.6",
+        # PyAV. LTX re-compresses the conditioning image through H.264 at a
+        # given CRF before encoding it, to match how the model saw conditioning
+        # frames in training. Without `av` the pipeline raises at call time.
+        # The alternative is passing image_crf=0 to skip re-compression, but
+        # that changes the conditioning the model receives.
+        "av>=12.0.0",
     ],
     system_dependencies=["ffmpeg"],
     volume=WEIGHTS_VOLUME,
