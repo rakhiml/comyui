@@ -204,20 +204,28 @@ class LTXImageToVideo:
         # a worker that serves many requests instead of exactly one.
         self.pipe.enable_model_cpu_offload()
 
-        # Decode in tiles as well, so the decode peak stays low even when the
-        # VAE is the resident module. Explicit sizes rather than defaults: the
-        # defaults only split samples above their own minimums, and a 768x512
-        # clip can sit under that threshold and silently decode whole.
-        try:
-            self.pipe.vae.enable_tiling(
-                tile_sample_min_height=256,
-                tile_sample_min_width=256,
-                tile_sample_stride_height=192,
-                tile_sample_stride_width=192,
-            )
-            print("[boot] VAE tiling enabled (256px tiles)", flush=True)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[boot] VAE tiling unavailable: {exc}", flush=True)
+        # VAE tiling is OFF by default because it costs image quality: the VAE
+        # decodes each tile separately and blends the overlaps, so tiles that
+        # are small relative to the frame leave visible seams and texture
+        # artifacts. An earlier 256px/192px-stride setting here (64px of
+        # overlap on a 768x512 frame) did exactly that.
+        #
+        # Model CPU offload above is what buys the VRAM headroom; tiling was
+        # belt-and-braces. Re-enable it only if decodes OOM again — and if so
+        # prefer large tiles with generous overlap over small ones.
+        if os.environ.get("ENABLE_VAE_TILING", "").lower() in ("1", "true", "yes"):
+            try:
+                self.pipe.vae.enable_tiling(
+                    tile_sample_min_height=512,
+                    tile_sample_min_width=512,
+                    tile_sample_stride_height=384,
+                    tile_sample_stride_width=384,
+                )
+                print("[boot] VAE tiling enabled (512px tiles)", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[boot] VAE tiling unavailable: {exc}", flush=True)
+        else:
+            print("[boot] VAE tiling off (full-frame decode)", flush=True)
 
         print(f"[boot] pipeline ready in {time.time() - t0:.1f}s", flush=True)
         self._free_gpu("after load")
@@ -297,6 +305,7 @@ class LTXImageToVideo:
         seed: int = None,
         lora: str = None,
         lora_scale: float = 1.0,
+        include_audio: bool = True,
     ) -> dict:
         import base64
         import io
@@ -305,7 +314,7 @@ class LTXImageToVideo:
         import time
 
         import torch
-        from diffusers.utils import export_to_video, load_image
+        from diffusers.utils import load_image
         from PIL import Image
 
         # LTX requires width/height divisible by 32 and num_frames == 8k+1.
@@ -352,13 +361,36 @@ class LTXImageToVideo:
                 # ships no prompt_enhancer component, but pin it so an upstream
                 # default change cannot silently start rewriting prompts.
                 enable_prompt_enhancement=False,
+                # Float frames in [0, 1] rather than PIL. encode_video wants
+                # these, and it avoids a needless round trip through uint8.
+                output_type="np",
                 generator=generator,
             )
 
-            # LTX-2.3 generates video and audio jointly; export_to_video writes
-            # the video track only. Mux result.audio separately if you need sound.
+            # Encode with LTX's own PyAV encoder, not export_to_video.
+            #
+            # export_to_video defaults to quality=5.0 on a 0-10 scale, i.e.
+            # middling variable bitrate — a 2s 768x512 clip came out at 76KB,
+            # about 1.5KB per frame, which is where the compression artifacts
+            # came from. encode_video is the path the official LTX-2 example
+            # uses, and it muxes the audio the model generates instead of
+            # discarding it.
+            from diffusers.utils import encode_video
+
             out_path = os.path.join(tempfile.mkdtemp(), "output.mp4")
-            export_to_video(result.frames[0], out_path, fps=fps)
+            audio_track = None
+            audio_rate = None
+            if include_audio and getattr(result, "audio", None) is not None:
+                audio_track = result.audio[0].float().cpu()
+                audio_rate = self.pipe.vocoder.config.output_sampling_rate
+
+            encode_video(
+                result.frames[0],
+                fps=int(fps),
+                output_path=out_path,
+                audio=audio_track,
+                audio_sample_rate=audio_rate,
+            )
 
             with open(out_path, "rb") as f:
                 video_b64 = base64.b64encode(f.read()).decode("utf-8")
@@ -380,4 +412,5 @@ class LTXImageToVideo:
             "lora": lora,
             "lora_scale": float(lora_scale) if active_adapter else None,
             "negative_prompt": negative_prompt,
+            "has_audio": bool(include_audio),
         }
