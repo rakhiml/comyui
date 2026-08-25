@@ -16,20 +16,24 @@ Deploy:
     flash deploy
 """
 
-import os
-
 from runpod_flash import DataCenter, Endpoint, GpuGroup, NetworkVolume, PodTemplate
 
-# Read at DEPLOY time from the local environment and injected into the endpoint.
-# Never hardcode it here — this repository is public.
+# HF_TOKEN is deliberately NOT set here.
 #
-# The default checkpoint is public and ungated, so this is optional; it mainly
-# buys higher Hugging Face rate limits on the initial ~95GB pull, and is required
-# only if MODEL_ID is switched to a gated checkpoint.
+# Set it as an environment variable on the endpoint in the Runpod console
+# (Serverless -> ltx23-i2v -> Manage -> Environment Variables). huggingface_hub
+# reads HF_TOKEN from the worker environment on its own, so no code needs to
+# read or forward it, and the token never touches this public repository or a
+# local shell.
 #
-#   export HF_TOKEN=...   # then: flash deploy
-_HF_TOKEN = os.environ.get("HF_TOKEN")
-_ENDPOINT_ENV = {"HF_TOKEN": _HF_TOKEN} if _HF_TOKEN else None
+# It is optional for the default checkpoint, which is public and ungated — it
+# raises Hugging Face rate limits on the initial ~95GB pull and silences the
+# "sending unauthenticated requests" warning. It becomes mandatory only if
+# MODEL_ID is pointed at a gated checkpoint.
+#
+# NOTE: verify the variable survives a `flash deploy`. Flash manages the
+# endpoint's env (it writes FLASH_APP, FLASH_ENV and a source fingerprint), so
+# a redeploy may reset console-set values.
 
 # The existing 150GB volume in US-KS-2.
 #
@@ -87,7 +91,6 @@ MODEL_ID = "diffusers/LTX-2.3-Distilled-Diffusers"
         "av>=12.0.0",
     ],
     system_dependencies=["ffmpeg"],
-    env=_ENDPOINT_ENV,
     volume=WEIGHTS_VOLUME,
     # Pin scheduling to the volume's datacenter. Without this the endpoint is
     # offered every datacenter Flash knows about, and only US-KS-2 has the volume.
