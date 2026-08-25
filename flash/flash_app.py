@@ -36,8 +36,12 @@ MODEL_ID = "diffusers/LTX-2.3-Distilled-Diffusers"
 
 @Endpoint(
     name="ltx23-i2v",
-    # H100 80GB. A100 (AMPERE_80) has no capacity in the volume's datacenter.
-    gpu=GpuGroup.ADA_80_PRO,
+    # Several 80GB+ pools, because the endpoint is pinned to one datacenter and
+    # per-DC stock shifts hour to hour — a single pool leaves workers THROTTLED
+    # when that pool drains. AMPERE_80 (A100, $2.72/hr) is the cheapest of these
+    # and ADA_80_PRO (H100) is $4.79/hr, so listing A100 first also favours the
+    # cheaper option when both have capacity.
+    gpu=[GpuGroup.AMPERE_80, GpuGroup.ADA_80_PRO, GpuGroup.BLACKWELL_96],
     # One worker until the volume is seeded; several cold workers would
     # otherwise race to download the same ~95GB of weights.
     workers=(0, 1),
