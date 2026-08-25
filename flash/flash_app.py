@@ -31,20 +31,6 @@ WEIGHTS_VOLUME = NetworkVolume(
     size=150,
 )
 
-# Installed at build time into the deploy artifact, not per cold start.
-# torch is NOT listed: the Flash GPU runtime image already provides it, and
-# pulling a second copy would bloat the artifact for no benefit.
-PYTHON_DEPS = [
-    "diffusers==0.40.0",
-    "transformers>=4.44.0",
-    "accelerate>=0.34.0",
-    "imageio[ffmpeg]>=2.34.0",
-    "imageio-ffmpeg>=0.5.1",
-    "Pillow>=10.0.0",
-    "sentencepiece>=0.2.0",
-    "hf_transfer>=0.1.6",
-]
-
 MODEL_ID = "diffusers/LTX-2.3-Distilled-Diffusers"
 
 
@@ -59,7 +45,24 @@ MODEL_ID = "diffusers/LTX-2.3-Distilled-Diffusers"
     # The seeding run downloads ~95GB, loads a 22B model, then generates.
     # The 600s default would kill it partway through.
     execution_timeout_ms=1_800_000,
-    dependencies=PYTHON_DEPS,
+    # This list MUST stay an inline literal. Flash collects build-time
+    # dependencies by static AST analysis and only accepts an ast.List here
+    # (see extract_remote_dependencies in its build.py) — passing a module-level
+    # constant is silently skipped, the artifact ships with zero packages, and
+    # the worker then pip-installs reactively one import failure at a time.
+    #
+    # torch is deliberately absent: the Flash GPU runtime image already provides
+    # it, and `flash deploy` auto-excludes torch packages anyway.
+    dependencies=[
+        "diffusers==0.40.0",
+        "transformers>=4.44.0",
+        "accelerate>=0.34.0",
+        "imageio[ffmpeg]>=2.34.0",
+        "imageio-ffmpeg>=0.5.1",
+        "Pillow>=10.0.0",
+        "sentencepiece>=0.2.0",
+        "hf_transfer>=0.1.6",
+    ],
     system_dependencies=["ffmpeg"],
     volume=WEIGHTS_VOLUME,
     # Pin scheduling to the volume's datacenter. Without this the endpoint is
