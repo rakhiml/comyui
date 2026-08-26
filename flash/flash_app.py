@@ -409,6 +409,17 @@ class LTXImageToVideo:
             DEFAULT_GUIDANCE if guidance_scale is None else float(guidance_scale)
         )
 
+        # Warn on the combination that silently produces bad video: the dev
+        # checkpoint denoised with the distilled step count and no distillation
+        # applied. It does not error, it just comes out under-denoised.
+        if not IS_DISTILLED and steps < 20 and lora != "distill":
+            print(
+                f"[warn] {steps} steps on the dev checkpoint without lora='distill'. "
+                f"Dev expects ~{DEFAULT_STEPS} steps and guidance ~{DEFAULT_GUIDANCE}; "
+                f"low step counts here look under-denoised rather than fast.",
+                flush=True,
+            )
+
         # LTX requires width/height divisible by 32 and num_frames == 8k+1.
         # Clamp rather than reject, so odd client values still produce video.
         width = max(32, int(round(int(width) / 32)) * 32)
@@ -459,7 +470,12 @@ class LTXImageToVideo:
                 # Only supplied at the schedule's own step count; a caller
                 # asking for a different number of steps has left the schedule
                 # behind anyway.
-                sigmas=DISTILLED_SIGMA_VALUES if int(steps) == len(DISTILLED_SIGMA_VALUES) else None,
+                sigmas=(
+                    DISTILLED_SIGMA_VALUES
+                    if (IS_DISTILLED or active_adapter == "distill")
+                    and steps == len(DISTILLED_SIGMA_VALUES)
+                    else None
+                ),
                 guidance_scale=float(guidance_scale),
                 # Match the H.264 compression the conditioning images were
                 # trained against (33 for LTX-2.3).
